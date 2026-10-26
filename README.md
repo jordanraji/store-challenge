@@ -100,6 +100,37 @@ STORE_CAPTURE_UI=1 uv run pytest -q tests/test_browser.py::test_responsive_layou
 
 Screenshots are generated under `.impeccable/review/`, excluded from Git and Docker. The maintained interface guidance is in `DESIGN.md`, `DIRECTION.md`, and `PRODUCT.md`.
 
+## Architecture diagrams
+
+All three C4 diagrams are defined in [store.puml](docs/architecture/store.puml) using PlantUML's bundled C4 library. The frontend and API share one application container; business modules are not separate services. The migration job is a short-lived process, and payment is simulated inside the application.
+
+### Level 1: System context
+
+![Store system context](docs/architecture/generated/c4-context.svg)
+
+### Level 2: Containers
+
+![Store containers](docs/architecture/generated/c4-containers.svg)
+
+### Level 3: Application components
+
+![Store application components](docs/architecture/generated/c4-components.svg)
+
+This level expands the application container into HTML and API entry points, shared validation and security, catalog/import/order services, and ORM persistence. These are in-process components, not independently deployed services.
+
+The `Architecture diagrams` GitHub Actions workflow renders SVG images when architecture files, its workflow, or this README change. Pull requests receive downloadable artifacts. Pushes to the default branch also commit updated images, so these relative image links display directly on GitHub. You can also run the workflow manually from the Actions tab. The publishing job uses the repository's `GITHUB_TOKEN` with `contents: write`; repository rules must permit its commits. If branch protection blocks direct writes, generated images remain available as workflow artifacts and can be committed through a pull request.
+
+Regenerate locally from the repository root:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:/workspace" -w /workspace \
+  ghcr.io/plantuml/plantuml:1.2026.9 \
+  -tsvg -failfast2 -o generated docs/architecture/store.puml
+```
+
+The renderer version is fixed, and C4 includes come from its bundled library rather than remote URLs. Generated SVG images are committed intentionally for README rendering. The workflow updates the images; it does not infer architecture changes from application code. Update the `.puml` source when the architecture changes.
+
 ## Selected architecture decisions
 
 Each entry describes the decision, the implemented approach, and the alternatives considered.
@@ -180,7 +211,7 @@ Each entry describes the decision, the implemented approach, and the alternative
 
 **Decision:** Use pytest, HTTPX, Playwright, Ruff, and mypy to validate behavior and maintainability.
 
-**Approach:** Test CRUD, validation, errors, search, CSV import, rollback, stale edits, and purchase idempotency. Concurrency tests use independent connections and coordinated overlap, including competing purchases for the last unit and simultaneous requests sharing an idempotency key. Browser tests exercise actual HTTP flows. The commands above provide reproducible local checks. GitHub Actions and GitHub delivery remain planned; no workflow or publication is currently configured.
+**Approach:** Test CRUD, validation, errors, search, CSV import, rollback, stale edits, and purchase idempotency. Concurrency tests use independent connections and coordinated overlap, including competing purchases for the last unit and simultaneous requests sharing an idempotency key. Browser tests exercise actual HTTP flows. The commands above provide reproducible local checks. An architecture-rendering GitHub Actions workflow is included; an automated application test/build workflow is not yet configured.
 
 **Alternatives considered:** Manual-only checks would miss regressions and timing-sensitive failures. An arbitrary coverage percentage would not establish that important failure and concurrency scenarios behave correctly.
 

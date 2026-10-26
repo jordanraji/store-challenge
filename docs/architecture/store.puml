@@ -1,0 +1,66 @@
+@startuml c4-context
+!include <C4/C4_Context>
+LAYOUT_LEFT_RIGHT()
+title Store - C4 Level 1: System Context
+Person(shopper, "Shopper", "Browses products and completes simulated purchases")
+Person(manager, "Catalog manager", "Maintains products and reviews CSV imports in the local demo")
+System(store, "Store", "Local e-commerce application with catalog, search, inventory, CSV import and simulated checkout")
+Rel(shopper, store, "Searches products, manages a bag and places orders", "HTTP")
+Rel(manager, store, "Creates and edits products; reviews and confirms imports", "HTTP")
+SHOW_LEGEND()
+@enduml
+
+@startuml c4-containers
+!include <C4/C4_Container>
+LAYOUT_LEFT_RIGHT()
+title Store - C4 Level 2: Containers
+Person(shopper, "Shopper", "Uses the storefront")
+Person(manager, "Catalog manager", "Uses local administration")
+System_Boundary(store, "Store") {
+    Container(app, "Web application and API", "Python 3.12, FastAPI, Jinja2, HTMX, Bootstrap 5", "Serves HTML and JSON; runs catalog, import and order services with shared validation and transactions")
+    ContainerDb(db, "Store database", "PostgreSQL 17.6", "Stores products, stock, orders, idempotency records and CSV review batches; provides full-text and trigram search")
+    Container(migrate, "Schema migration job", "Alembic; same application image", "Runs once before application startup and exits")
+}
+Rel(shopper, app, "Browses, searches and purchases", "HTTP, port 5000")
+Rel(manager, app, "Manages products and CSV reviews", "HTTP, port 5000")
+Rel(app, db, "Reads and writes using bound parameters and transactions", "SQLAlchemy / psycopg, TCP 5432")
+Rel(migrate, db, "Applies versioned schema migrations", "SQLAlchemy / psycopg, TCP 5432")
+SHOW_LEGEND()
+@enduml
+
+@startuml c4-components
+!include <C4/C4_Component>
+LAYOUT_TOP_DOWN()
+title Store - C4 Level 3: Web Application Components
+Person(user, "Shopper / catalog manager", "Uses the local storefront, administration or JSON API")
+Container_Boundary(app, "Store web application and API") {
+    Component(web, "HTML routes and presentation", "app.web; Jinja2, HTMX", "Renders pages and partials; coordinates forms, bag and checkout")
+    Component(api, "JSON API routes", "app.catalog.router; app.imports.router; app.orders.router", "Translates HTTP requests and responses for product, import and order operations")
+    Component(validation, "Input contracts and validation", "Pydantic schemas; app.core.security", "Shared product validation, plain-text rules and order contracts")
+    Component(security, "Web session and request security", "app.web.security; middleware in app.main and app.core.security", "Initializes signed sessions; checks form CSRF; adds CSP and security headers")
+    Component(catalog, "Catalog service", "app.catalog.service", "Product CRUD, search, version checks and atomic stock deductions")
+    Component(imports, "CSV import service", "app.imports.service", "Parses and validates CSV; stages, confirms or cancels review batches")
+    Component(orders, "Order service", "app.orders.service", "Coordinates purchase transactions, idempotency and bounded transient retries")
+    Component(persistence, "Database sessions and mapped models", "app.core.database; app.core.dependencies; module models", "SQLAlchemy session factory and parameterized ORM persistence")
+}
+ContainerDb(db, "Store database", "PostgreSQL 17.6", "Products, search indexes, stock, orders, idempotency records and import reviews")
+Rel(user, web, "Uses HTML forms and HTMX", "HTTP")
+Rel(user, api, "Calls JSON and multipart endpoints", "HTTP")
+Rel(web, security, "Initializes sessions and checks writing forms")
+Rel(web, validation, "Validates form input")
+Rel(api, validation, "Validates request input")
+Rel(web, catalog, "Browses and manages products")
+Rel(web, imports, "Reviews and confirms CSV imports")
+Rel(web, orders, "Checks out the bag")
+Rel(api, catalog, "Invokes catalog operations")
+Rel(api, imports, "Invokes CSV import")
+Rel(api, orders, "Creates idempotent orders")
+Rel(imports, validation, "Validates CSV rows")
+Rel(imports, catalog, "Creates validated products")
+Rel(orders, catalog, "Deducts stock within the purchase transaction")
+Rel(catalog, persistence, "Queries and updates products")
+Rel(imports, persistence, "Stores and locks review batches")
+Rel(orders, persistence, "Owns purchase transaction and order persistence")
+Rel(persistence, db, "Executes bound SQL statements", "psycopg, TCP 5432")
+SHOW_LEGEND()
+@enduml
