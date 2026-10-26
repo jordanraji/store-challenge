@@ -6,15 +6,15 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.catalog.models import Product
 from app.catalog.schemas import ProductInput
-from app.catalog.service import create_product
+from app.catalog.service import create_product, existing_skus
 from app.core.errors import DomainError
 from app.imports.models import ImportBatch
+from app.imports.repository import ImportBatchRepository
 
+repository = ImportBatchRepository()
 COLUMNS = {"name", "sku", "description", "category", "price", "stock", "weight_kg"}
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 1000
@@ -27,7 +27,7 @@ class ImportPreview:
     total_rows: int
 
 
-def preview_products(session: Session, content: bytes) -> ImportPreview:
+async def preview_products(session: AsyncSession, content: bytes) -> ImportPreview:
     if len(content) > MAX_BYTES:
         raise DomainError(413, "file_too_large", "CSV exceeds 2 MiB")
     try:
@@ -87,16 +87,18 @@ def preview_products(session: Session, content: bytes) -> ImportPreview:
                 errors.append({**identity, "message": str(exc)})
         if not total_rows:
             raise DomainError(422, "empty_csv", "CSV contains no products")
-        existing = set(session.scalars(select(Product.sku).where(Product.sku.in_(seen))).all())
+        existing = await existing_skus(session, list(seen))
         errors.extend(
-            {
-                "row": number,
-                "message": "SKU already exists",
-                "sku": product.sku,
-                "name": product.name,
-            }
-            for number, product in products
-            if product.sku in existing
+            (
+                {
+                    "row": number,
+                    "message": "SKU already exists",
+                    "sku": product.sku,
+                    "name": product.name,
+                }
+                for number, product in products
+                if product.sku in existing
+            )
         )
         valid = [(number, product) for number, product in products if product.sku not in existing]
         return ImportPreview(valid, sorted(errors, key=lambda error: error["row"]), total_rows)
@@ -104,24 +106,24 @@ def preview_products(session: Session, content: bytes) -> ImportPreview:
         raise DomainError(422, "invalid_csv", "CSV must be valid UTF-8 with valid quoting") from exc
 
 
-def import_products(
-    session: Session, content: bytes, allow_partial: bool = False
+async def import_products(
+    session: AsyncSession, content: bytes, allow_partial: bool = False
 ) -> dict[str, int]:
-    preview = preview_products(session, content)
+    preview = await preview_products(session, content)
     if preview.errors and (not allow_partial or not preview.products):
         raise DomainError(
             422, "invalid_csv", "No products imported; correct the reported rows", preview.errors
         )
     for _, product in preview.products:
-        create_product(session, product)
+        await create_product(session, product)
     result = {"imported": len(preview.products)}
     if allow_partial:
         result["skipped"] = len(preview.errors)
     return result
 
 
-def stage_import(
-    session: Session, owner_id: str, filename: str, preview: ImportPreview
+async def stage_import(
+    session: AsyncSession, owner_id: str, filename: str, preview: ImportPreview
 ) -> ImportBatch:
     batch = ImportBatch(
         owner_id=owner_id,
@@ -134,17 +136,11 @@ def stage_import(
         total_rows=preview.total_rows,
         expires_at=datetime.now(UTC) + timedelta(minutes=30),
     )
-    session.add(batch)
-    session.flush()
-    return batch
+    return await repository.create(session, batch)
 
 
-def get_batch(session: Session, batch_id: UUID, owner_id: str) -> ImportBatch:
-    batch = session.scalar(
-        select(ImportBatch)
-        .where(ImportBatch.id == batch_id, ImportBatch.owner_id == owner_id)
-        .with_for_update()
-    )
+async def get_batch(session: AsyncSession, batch_id: UUID, owner_id: str) -> ImportBatch:
+    batch = await repository.get_for_update(session, batch_id, owner_id)
     if batch is None:
         raise DomainError(
             404, "import_not_found", "This import was not found. Upload your CSV again."
@@ -152,8 +148,8 @@ def get_batch(session: Session, batch_id: UUID, owner_id: str) -> ImportBatch:
     return batch
 
 
-def confirm_import(session: Session, batch_id: UUID, owner_id: str) -> dict[str, int]:
-    batch = get_batch(session, batch_id, owner_id)
+async def confirm_import(session: AsyncSession, batch_id: UUID, owner_id: str) -> dict[str, int]:
+    batch = await get_batch(session, batch_id, owner_id)
     if batch.status == "completed":
         return {"imported": batch.imported, "skipped": len(batch.errors)}
     if batch.status == "cancelled":
@@ -180,11 +176,7 @@ def confirm_import(session: Session, batch_id: UUID, owner_id: str) -> dict[str,
             "import_rules_changed",
             "Some reviewed rows no longer pass validation. Upload the CSV again to review the errors.",
         ) from exc
-    existing = set(
-        session.scalars(
-            select(Product.sku).where(Product.sku.in_([product.sku for _, product in products]))
-        ).all()
-    )
+    existing = await existing_skus(session, [product.sku for _, product in products])
     if existing:
         raise DomainError(
             409,
@@ -197,18 +189,15 @@ def confirm_import(session: Session, batch_id: UUID, owner_id: str) -> dict[str,
             ],
         )
     for _, product in products:
-        create_product(session, product)
-    batch.status = "completed"
-    batch.imported = len(products)
-    session.flush()
+        await create_product(session, product)
+    await repository.complete(session, batch, len(products))
     return {"imported": batch.imported, "skipped": len(batch.errors)}
 
 
-def cancel_import(session: Session, batch_id: UUID, owner_id: str) -> None:
-    batch = get_batch(session, batch_id, owner_id)
+async def cancel_import(session: AsyncSession, batch_id: UUID, owner_id: str) -> None:
+    batch = await get_batch(session, batch_id, owner_id)
     if batch.status == "completed":
         raise DomainError(
             409, "import_completed", "This import is already complete and cannot be cancelled."
         )
-    batch.status = "cancelled"
-    batch.products = []
+    await repository.cancel(session, batch)

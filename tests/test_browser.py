@@ -8,6 +8,8 @@ import pytest
 import uvicorn
 from playwright.sync_api import Browser, expect, sync_playwright
 
+from app.main import create_app
+
 
 @pytest.fixture(scope="session")
 def browser() -> Iterator[Browser]:
@@ -22,7 +24,7 @@ def live_url(app) -> Iterator[str]:
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    server = uvicorn.Server(uvicorn.Config(create_app(app.state.database_url), log_level="error"))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
     thread.start()
     deadline = time.monotonic() + 10
@@ -284,7 +286,7 @@ def test_browser_legacy_data_remains_text_and_csp_blocks_inline_execution(
     from app.catalog.models import Product
 
     payload = '<script>alert("xss")</script>'
-    with app.state.session_factory.begin() as session:
+    with app.state.test_session_factory.begin() as session:
         product = Product(
             **{
                 **product_data,

@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 
+from app.main import create_app
 from app.orders.models import IdempotencyRecord, Order
 
 
@@ -47,7 +48,7 @@ def test_multiline_failure_rolls_back_everything(client, app, product_data):
     }
     assert client.post("/api/orders", json=payload, headers=headers()).status_code == 409
     assert client.get(f"/api/products/{first['id']}").json()["stock"] == 5
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 0
         assert session.scalar(select(func.count()).select_from(IdempotencyRecord)) == 0
 
@@ -76,11 +77,11 @@ def parallel_requests(app, requests, locked_product=None):
 
     def send(arguments):
         path, payload, request_headers = arguments
-        with TestClient(app) as independent_client:
+        with TestClient(create_app(app.state.database_url)) as independent_client:
             barrier.wait(timeout=10)
             return independent_client.post(path, json=payload, headers=request_headers)
 
-    with app.state.session_factory() as blocker:
+    with app.state.test_session_factory() as blocker:
         if locked_product is not None:
             blocker.execute(
                 text("SELECT id FROM products WHERE id = :id FOR UPDATE"), {"id": locked_product}
@@ -91,7 +92,7 @@ def parallel_requests(app, requests, locked_product=None):
                 try:
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline:
-                        with app.state.session_factory() as observer:
+                        with app.state.test_session_factory() as observer:
                             waiting = observer.scalar(
                                 text(
                                     "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()"
@@ -117,7 +118,7 @@ def test_concurrent_last_unit(app, client, product_data):
     )
     assert sorted(response.status_code for response in responses) == [201, 409]
     assert client.get(f"/api/products/{product['id']}").json()["stock"] == 0
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
 
 
@@ -139,7 +140,7 @@ def test_concurrent_same_key_and_reordered_payload(app, client, product_data):
         client.post("/api/orders", json=equivalent, headers=headers()).json() == responses[0].json()
     )
     assert client.get(f"/api/products/{product['id']}").json()["stock"] == 3
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
 
 
@@ -191,7 +192,7 @@ def test_order_snapshot_survives_product_edit_and_delete(app, client, product_da
     assert client.post("/api/orders", json=payload, headers=headers()).json() == original
     from app.orders.models import OrderLine
 
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         line = session.scalar(select(OrderLine))
         assert line.name == product_data["name"]
         assert str(line.unit_price) == "12.50"

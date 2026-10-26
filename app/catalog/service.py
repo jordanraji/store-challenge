@@ -1,27 +1,27 @@
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import Product
+from app.catalog.repository import ProductRepository
 from app.catalog.schemas import ProductInput, ProductUpdate
 from app.core.errors import DomainError
 
+repository = ProductRepository()
 
-def get_product(session: Session, product_id: int) -> Product:
-    product = session.scalar(select(Product).where(Product.id == product_id, Product.active))
+
+async def get_product(session: AsyncSession, product_id: int) -> Product:
+    product = await repository.get_active(session, product_id)
     if product is None:
         raise DomainError(404, "product_not_found", "Product not found")
     return product
 
 
-def create_product(session: Session, data: ProductInput) -> Product:
-    product = Product(**data.model_dump())
-    session.add(product)
+async def create_product(session: AsyncSession, data: ProductInput) -> Product:
     try:
-        session.flush()
+        product = await repository.create(session, data.model_dump())
     except IntegrityError as exc:
         if getattr(exc.orig, "sqlstate", None) == "23505":
             raise DomainError(409, "duplicate_sku", "SKU already exists") from exc
@@ -29,17 +29,12 @@ def create_product(session: Session, data: ProductInput) -> Product:
     return product
 
 
-def update_product(session: Session, product_id: int, data: ProductUpdate) -> Product:
-    get_product(session, product_id)
+async def update_product(session: AsyncSession, product_id: int, data: ProductUpdate) -> Product:
+    await get_product(session, product_id)
     try:
-        product = session.scalar(
-            update(Product)
-            .where(Product.id == product_id, Product.active, Product.version == data.version)
-            .values(**data.model_dump(exclude={"version"}), version=Product.version + 1)
-            .returning(Product)
-            .execution_options(populate_existing=True)
+        product = await repository.update(
+            session, product_id, data.version, data.model_dump(exclude={"version"})
         )
-        session.flush()
     except IntegrityError as exc:
         if getattr(exc.orig, "sqlstate", None) == "23505":
             raise DomainError(409, "duplicate_sku", "SKU already exists") from exc
@@ -49,59 +44,22 @@ def update_product(session: Session, product_id: int, data: ProductUpdate) -> Pr
     return product
 
 
-def delete_product(session: Session, product_id: int, version: int) -> None:
-    get_product(session, product_id)
-    result = session.scalar(
-        update(Product)
-        .where(Product.id == product_id, Product.active, Product.version == version)
-        .values(active=False, version=Product.version + 1)
-        .returning(Product.id)
-    )
-    if result is None:
+async def delete_product(session: AsyncSession, product_id: int, version: int) -> None:
+    await get_product(session, product_id)
+    if not await repository.deactivate(session, product_id, version):
         raise DomainError(409, "stale_product", "Product changed; reload before deleting")
 
 
-def search_products(
-    session: Session, query: str, page: int, page_size: int, category: str = ""
+async def search_products(
+    session: AsyncSession, query: str, page: int, page_size: int, category: str = ""
 ) -> dict[str, Any]:
-    statement = select(Product).where(Product.active)
-    if category:
-        statement = statement.where(Product.category == category)
-    if query:
-        normalized = func.unaccent(func.lower(query))
-        document = Product.search_document
-        terms = func.plainto_tsquery("simple", normalized)
-        name = Product.search_name
-        sku_match = Product.sku == query.upper()
-        similarity = func.similarity(name, normalized)
-        statement = statement.where(
-            or_(sku_match, document.op("@@")(terms), name.bool_op("%")(normalized))
-        )
-        statement = statement.order_by(
-            case((sku_match, 1), else_=0).desc(),
-            func.ts_rank_cd(document, terms).desc(),
-            similarity.desc(),
-        )
-    total = session.scalar(select(func.count()).select_from(statement.order_by(None).subquery()))
-    products = session.scalars(
-        statement.order_by(Product.id).offset((page - 1) * page_size).limit(page_size)
-    ).all()
-    return {"items": products, "total": total, "page": page, "page_size": page_size}
+    return await repository.search(session, query, page, page_size, category)
 
 
-def consume_stock(session: Session, product_id: int, quantity: int) -> dict[str, Any]:
-    row = (
-        session.execute(
-            update(Product)
-            .where(Product.id == product_id, Product.active, Product.stock >= quantity)
-            .values(stock=Product.stock - quantity, version=Product.version + 1)
-            .returning(Product.id, Product.sku, Product.name, Product.price)
-        )
-        .mappings()
-        .one_or_none()
-    )
+async def consume_stock(session: AsyncSession, product_id: int, quantity: int) -> dict[str, Any]:
+    row = await repository.deduct_stock(session, product_id, quantity)
     if row is None:
-        get_product(session, product_id)
+        await get_product(session, product_id)
         raise DomainError(
             409, "insufficient_stock", "Insufficient stock", {"product_id": product_id}
         )
@@ -114,9 +72,9 @@ def consume_stock(session: Session, product_id: int, quantity: int) -> dict[str,
     }
 
 
-def list_categories(session: Session) -> list[str]:
-    return list(
-        session.scalars(
-            select(Product.category).where(Product.active).distinct().order_by(Product.category)
-        ).all()
-    )
+async def list_categories(session: AsyncSession) -> list[str]:
+    return await repository.list_categories(session)
+
+
+async def existing_skus(session: AsyncSession, skus: list[str]) -> set[str]:
+    return await repository.existing_skus(session, skus)

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.imports.models import ImportBatch
 from app.imports.service import preview_products
+from app.main import create_app
 
 HEADER = "name,sku,description,category,price,stock,weight_kg\n"
 MIXED = (
@@ -54,7 +55,7 @@ def test_cancel_is_final_and_saves_no_products(client, app):
     assert "Upload cancelled. No products were imported." in response.text
     assert client.get("/api/products").json()["total"] == 0
     assert client.post("/admin/import/confirm", data=data).status_code == 409
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         batch = session.get(ImportBatch, UUID(data["batch_id"]))
         assert batch.status == "cancelled"
         assert batch.products == []
@@ -72,13 +73,13 @@ def test_all_invalid_rows_have_no_continue_action(client):
 def test_confirmation_checks_owner_csrf_and_expiry(client, app):
     _, data = stage(client)
     assert client.post("/admin/import/confirm", data={**data, "csrf": "wrong"}).status_code == 403
-    with TestClient(app) as other:
+    with TestClient(create_app(app.state.database_url)) as other:
         other_token = csrf(other.get("/admin/import"))
         assert (
             other.post("/admin/import/confirm", data={**data, "csrf": other_token}).status_code
             == 404
         )
-    with app.state.session_factory.begin() as session:
+    with app.state.test_session_factory.begin() as session:
         batch = session.get(ImportBatch, UUID(data["batch_id"]))
         batch.expires_at = datetime.now(UTC) - timedelta(seconds=1)
     assert client.post("/admin/import/confirm", data=data).status_code == 410
@@ -119,8 +120,12 @@ def test_first_valid_duplicate_is_kept(client):
 
 def test_original_challenge_csv_reports_errors_and_imports_only_valid_rows(client, app):
     content = Path("tests/fixtures/challenge-products.csv").read_bytes()
-    with app.state.session_factory() as session:
-        preview = preview_products(session, content)
+
+    async def preview_csv():
+        async with app.state.primary_db.get_db() as session:
+            return await preview_products(session, content)
+
+    preview = client.portal.call(preview_csv)
     assert preview.products and preview.errors
     assert preview.total_rows == len(preview.products) + len(preview.errors)
     review, data = stage(client, content)
@@ -138,7 +143,7 @@ def test_repeated_concurrent_confirmation_does_not_duplicate_products(client, ap
     cookies = dict(client.cookies)
 
     def confirm(_):
-        with TestClient(app) as independent:
+        with TestClient(create_app(app.state.database_url)) as independent:
             independent.cookies.update(cookies)
             barrier.wait(timeout=10)
             return independent.post("/admin/import/confirm", data=data)
@@ -147,6 +152,6 @@ def test_repeated_concurrent_confirmation_does_not_duplicate_products(client, ap
         responses = list(executor.map(confirm, range(2)))
     assert [response.status_code for response in responses] == [200, 200]
     assert client.get("/api/products").json()["total"] == 1
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         batch = session.scalar(select(ImportBatch))
         assert batch.status == "completed" and batch.imported == 1

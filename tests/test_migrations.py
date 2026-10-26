@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from alembic import command
 from alembic.config import Config
 
@@ -5,7 +7,8 @@ from alembic.config import Config
 def test_migration_matches_models(database_url):
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", database_url)
-    command.check(config)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(command.check, config).result(timeout=30)
 
 
 def test_health_endpoints(client):

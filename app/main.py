@@ -1,6 +1,7 @@
 import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,13 +9,13 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from app.catalog.router import router as catalog_router
 from app.core.config import Settings
-from app.core.database import make_session_factory
+from app.core.database import PostgreSQLClient
 from app.core.errors import DomainError
 from app.core.security import SecurityHeadersMiddleware
 from app.imports.router import router as imports_router
@@ -24,18 +25,22 @@ from app.web.router import router as web_router
 
 
 def create_app(database_url: str | None = None) -> FastAPI:
-    settings = Settings()
-    factory = make_session_factory(database_url or settings.database_url)
+    overrides: dict[str, Any] = {} if database_url is None else {"database_url": database_url}
+    settings = Settings(**overrides)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
-        yield
-        factory.kw["bind"].dispose()
+        client = PostgreSQLClient(settings.database_url, settings)
+        application.state.primary_db = client
+        try:
+            yield
+        finally:
+            await client.close()
 
     application = FastAPI(
         title="Store", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None
     )
-    application.state.session_factory = factory
+    application.state.database_url = settings.database_url
     application.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret or secrets.token_urlsafe(48),
@@ -109,11 +114,11 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @application.get("/health/ready", tags=["health"])
-    def ready() -> JSONResponse:
+    async def ready() -> JSONResponse:
         try:
-            with factory() as session:
-                session.execute(text("SELECT 1"))
-        except OperationalError:
+            async with application.state.primary_db.get_db() as session:
+                await session.execute(text("SELECT 1"))
+        except (SQLAlchemyError, TimeoutError):
             return JSONResponse(status_code=503, content={"status": "unavailable"})
         return JSONResponse(content={"status": "ok"})
 
@@ -122,6 +127,3 @@ def create_app(database_url: str | None = None) -> FastAPI:
     application.include_router(orders_router)
     application.include_router(web_router)
     return application
-
-
-app = create_app()

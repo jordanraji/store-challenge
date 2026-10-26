@@ -53,7 +53,7 @@ cp .env.example .env
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | PostgreSQL connection for Python running on the host. Compose supplies its own internal connection URL. |
+| `DATABASE_URL` | Required PostgreSQL asyncpg connection URL. There is no application fallback. Compose supplies its internal URL; host development must configure `.env` or the environment. |
 | `SESSION_SECRET` | Stable secret for signed sessions. An empty value generates a temporary secret per application process, invalidating sessions after restart. |
 
 Generate a secret with Python and place the result in `.env`:
@@ -61,6 +61,20 @@ Generate a secret with Python and place the result in `.env`:
 ```sh
 python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 ```
+
+The example host URL is `postgresql+asyncpg://store:store@127.0.0.1:5432/store`. The application validates the driver, required connection fields and port before startup, and hides configuration inputs in validation error messages. Missing or malformed configuration fails startup instead of silently connecting to a default database. Uvicorn uses the application factory so importing modules does not initialize configuration or connections. Optional database limits can be configured through environment variables and are forwarded by Compose:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DB_POOL_SIZE` | `5` | Retained connection pool capacity per process. |
+| `DB_MAX_OVERFLOW` | `5` | Additional connections allowed under load. |
+| `DB_POOL_TIMEOUT_SECONDS` | `10` | Maximum wait for an available pool connection. |
+| `DB_POOL_RECYCLE_SECONDS` | `1800` | Connection age threshold, checked on checkout. |
+| `DB_CONNECT_TIMEOUT_SECONDS` | `10` | Driver connection establishment timeout. |
+| `DB_COMMAND_TIMEOUT_SECONDS` | `30` | Driver operation timeout. |
+| `DB_STATEMENT_TIMEOUT_MS` | `15000` | PostgreSQL statement execution timeout. |
+
+Pools are per process: account for all workers and replicas when budgeting database connections. Pre-ping detects broken connections on checkout; it does not retry an interrupted transaction. Tests cover pool exhaustion, server timeouts, transaction cancellation, connection release, and lifespan disposal.
 
 Do not commit `.env`. Optional Compose overrides `API_PORT`, `DB_PORT`, and `SECURE_COOKIES` default to `5000`, `5432`, and `false`. Set `SECURE_COOKIES=true` when running behind HTTPS. If changing `DB_PORT` for host development, update `DATABASE_URL` to match.
 
@@ -73,7 +87,7 @@ uv sync --frozen
 cp .env.example .env
 docker compose up -d db --wait
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 5000
+uv run uvicorn app.main:create_app --factory --reload --host 127.0.0.1 --port 5000
 ```
 
 Copy the environment example only if you have not already configured `.env`. If the application container is running, stop it with `docker compose stop api` before starting Uvicorn on the same port.
@@ -90,7 +104,7 @@ uv run mypy
 uv run pytest -q
 ```
 
-On Linux, Playwright may require system libraries; use `uv run playwright install --with-deps chromium` to install them. Docker must be running for Testcontainers. Tests create an isolated PostgreSQL instance, apply real migrations, and reset tables between tests; they do not use the development database. The first run downloads PostgreSQL and Ryuk images. Do not run tests in parallel against the same test database without adding worker isolation.
+On Linux, Playwright may require system libraries; use `uv run playwright install --with-deps chromium` to install them. Docker must be running for Testcontainers. Tests create an isolated PostgreSQL instance, apply real async migrations, and reset tables between tests; they do not use the development database. Application requests use asyncpg; psycopg is a development-only dependency for independent test setup, inspection, and coordinating real database locks. Each test server has its own event loop and async pool. The first run downloads PostgreSQL and Ryuk images. Do not run tests in parallel against the same test database without adding worker isolation.
 
 Optional browser screenshots:
 
@@ -116,7 +130,7 @@ All three C4 diagrams are defined in [store.puml](docs/architecture/store.puml) 
 
 ![Store application components](docs/architecture/generated/c4-components.svg)
 
-This level expands the application container into HTML and API entry points, shared validation and security, catalog/import/order services, and ORM persistence. These are in-process components, not independently deployed services.
+This level expands the application container into HTML and API entry points, shared validation and security, catalog/import/order services, module repositories, and ORM persistence. These are in-process components, not independently deployed services.
 
 The `Architecture diagrams` GitHub Actions workflow renders SVG images when architecture files, its workflow, or this README change. Pull requests receive downloadable artifacts. Pushes to the default branch also commit updated images, so these relative image links display directly on GitHub. You can also run the workflow manually from the Actions tab. The publishing job uses the repository's `GITHUB_TOKEN` with `contents: write`; repository rules must permit its commits. If branch protection blocks direct writes, generated images remain available as workflow artifacts and can be committed through a pull request.
 
@@ -139,17 +153,17 @@ Each entry describes the decision, the implemented approach, and the alternative
 
 **Decision:** Use one application organized into `catalog`, `imports`, `orders`, and `web`, with shared infrastructure in `core`.
 
-**Approach:** Keep HTTP routes thin and business operations in services. HTML and JSON routes reuse those services. The service coordinating a use case owns its transaction, allowing stock, orders, and idempotency to commit together.
+**Approach:** Keep HTTP routes thin and business operations in services. Module-specific `ProductRepository`, `ImportBatchRepository`, and `OrderRepository` classes own SQLAlchemy queries, writes, row locks, and flushes. Repositories receive the current session and never commit or roll back; services and request transaction boundaries retain that responsibility. Imports access catalog persistence through catalog service operations, and orders consume stock through the catalog service. HTML and JSON routes reuse those services. The service coordinating a use case owns its transaction, allowing stock, orders, and idempotency to commit together.
 
 **Alternatives considered:** Microservices would introduce distributed coordination for a small application. Organization only by technical layers would make business boundaries less explicit.
 
 ### Python and FastAPI backend
 
-**Decision:** Use Python 3.12, FastAPI, Pydantic, Uvicorn, synchronous SQLAlchemy sessions, Alembic, and uv with a committed lockfile.
+**Decision:** Use Python 3.12, FastAPI, Pydantic, Uvicorn, asynchronous SQLAlchemy sessions with asyncpg, Alembic, and uv with a committed lockfile.
 
-**Approach:** Pydantic defines request contracts; FastAPI exposes validation and OpenAPI documentation. SQLAlchemy and Alembic handle persistence and schema evolution. Database access uses synchronous routes and services, avoiding blocking calls directly in asynchronous routes. uv installs the locked dependencies for development and Docker builds.
+**Approach:** Pydantic defines request contracts; FastAPI exposes validation and OpenAPI documentation. SQLAlchemy and Alembic handle persistence and schema evolution. Database routes, services, and repositories await asynchronous database operations. A `PostgreSQLClient` is created during application lifespan and disposed in `finally` at shutdown. It owns the async engine and session factory. `get_db()` provides a read/session scope without committing; `transaction()` commits successful operations and rolls back exceptions or cancellation. Each request or concurrent task uses its own session. Alembic uses an async engine and `run_sync` for migration operations. uv installs the locked dependencies for development and Docker builds.
 
-**Alternatives considered:** Flask would require assembling more of the validation and API documentation integration. Asynchronous database access was unnecessary for the scope and would add transaction-management complexity.
+**Alternatives considered:** Flask would require assembling more of the validation and API documentation integration. Synchronous SQLAlchemy was the initial implementation and was simpler to manage, but was replaced to support cooperative database I/O and explicit pool lifecycle management. A read replica and Redis were considered unnecessary; the application retains one authoritative database.
 
 ### Server-rendered frontend
 
@@ -260,3 +274,19 @@ SQLAlchemy binds values for writes and searches. A string such as `Robert'); DRO
 **Approach:** The builder uses uv 0.12.5, the lockfile, and a BuildKit cache to install execution dependencies. The final image copies the virtual environment and required application files, excludes uv and its cache, and runs as a non-root user. Dependency layers remain separate from application code to preserve build caching. Compose builds the image through `migrate`, reuses it for `api`, and waits for database health and successful migrations. PostgreSQL and its existing volume are preserved. The environment example contains only the host database URL and session secret; optional overrides retain their Compose defaults.
 
 **Alternatives considered:** Debian slim offers broader glibc wheel compatibility. Alpine uses musl, so binary dependency compatibility must be rechecked when changing versions or architectures; the locked dependencies built successfully on the local architecture without compilers. Combining instructions solely to reduce their count would not guarantee smaller images or better caching. See [uv's Docker integration guidance](https://docs.astral.sh/uv/guides/integration/docker/).
+
+### Module-specific repositories
+
+**Decision:** Separate persistence from business logic using `ProductRepository`, `ImportBatchRepository`, and `OrderRepository`.
+
+**Approach:** Repositories encapsulate SQLAlchemy queries, inserts, updates, row locks, and flushes. Each operation receives the current session; repositories never commit or roll back independently. Services retain business validation, domain errors, request canonicalization, retries, and transaction coordination. The import service accesses catalog data through catalog service operations, and the order service deducts stock through the catalog service. This preserves one transaction across all changes in a purchase or confirmed import. Integration and concurrency tests verify these boundaries against PostgreSQL. The repositories now use asynchronous sessions, as described below.
+
+**Alternatives considered:** Keeping SQL inside services would mix persistence details with business decisions. A generic CRUD repository would obscure specialized operations such as conditional stock deductions and locked import reviews. Changing persistence structure and the database driver in one step would make regressions harder to isolate; repositories were separated before the async migration.
+
+### Asyncpg and an explicit PostgreSQL client lifecycle
+
+**Decision:** Use SQLAlchemy `AsyncSession` with asyncpg and manage the engine and sessions through `PostgreSQLClient`. Retain one primary database without Redis or a read replica.
+
+**Approach:** Initialize the client during FastAPI lifespan and dispose its engine in `finally`. Database routes, services, and repositories await I/O, with one session per concurrent task. `get_db()` closes the session without committing; `transaction()` commits successful work and rolls back errors or cancellation. Configure bounded pool capacity, pre-ping, connection recycling, pool wait limits, and connection, command, and server statement timeouts. Purchases retain atomic stock updates, idempotency, stable product ordering, and whole-transaction retries for SQLSTATE `40P01` and `40001`, using `asyncio.sleep`. Alembic uses an async engine with `NullPool` and `run_sync`; no schema change is needed for the driver migration. Testcontainers and browser tests exercise the async application, while psycopg remains development-only for independent database inspection and lock coordination.
+
+**Alternatives considered:** Retaining synchronous SQLAlchemy would be simpler, but would not provide cooperative asynchronous database I/O. Psycopg's async support was another driver option; asyncpg was selected explicitly for this implementation. Redis and a read replica would introduce separate consistency and lifecycle concerns without a demonstrated need. Async I/O improves scheduling while waiting for the database; it does not make queries inherently faster or replace transactional concurrency controls.

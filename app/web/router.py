@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import ValidationError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import FormData, UploadFile
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
@@ -26,7 +26,7 @@ from app.web.presentation import render
 from app.web.security import checked_form, initialize_session
 
 router = APIRouter(include_in_schema=False)
-SessionDependency = Annotated[Session, Depends(get_session, scope="function")]
+SessionDependency = Annotated[AsyncSession, Depends(get_session, scope="function")]
 FormDependency = Annotated[FormData, Depends(checked_form)]
 
 
@@ -34,17 +34,19 @@ def redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
 
 
-def catalog_context(session: Session, q: str, category: str, page: int) -> dict[str, Any]:
+async def catalog_context(
+    session: AsyncSession, q: str, category: str, page: int
+) -> dict[str, Any]:
     return {
-        **catalog.search_products(session, q.strip(), page, 12, category),
+        **await catalog.search_products(session, q.strip(), page, 12, category),
         "q": q,
         "category": category,
-        "categories": catalog.list_categories(session),
+        "categories": await catalog.list_categories(session),
     }
 
 
 @router.get("/", response_class=HTMLResponse)
-def storefront(
+async def storefront(
     request: Request,
     session: SessionDependency,
     q: str = Query(default="", max_length=200),
@@ -54,24 +56,26 @@ def storefront(
     template = (
         "partials/catalog.html"
         if request.headers.get("HX-Request")
-        and not request.headers.get("HX-History-Restore-Request")
+        and (not request.headers.get("HX-History-Restore-Request"))
         else "store.html"
     )
-    return render(request, template, **catalog_context(session, q, category, page))
+    return render(request, template, **await catalog_context(session, q, category, page))
 
 
 @router.get("/products/{product_id}", response_class=HTMLResponse)
-def product_detail(request: Request, product_id: int, session: SessionDependency) -> HTMLResponse:
-    return render(request, "product.html", product=catalog.get_product(session, product_id))
+async def product_detail(
+    request: Request, product_id: int, session: SessionDependency
+) -> HTMLResponse:
+    return render(request, "product.html", product=await catalog.get_product(session, product_id))
 
 
 @router.post("/bag/items/{product_id}")
-def add_to_bag(
+async def add_to_bag(
     request: Request, product_id: int, session: SessionDependency, form: FormDependency
 ) -> Response:
     initialize_session(request)
     try:
-        product = catalog.get_product(session, product_id)
+        product = await catalog.get_product(session, product_id)
         cart = dict(request.session["cart"])
         quantity = cart.get(str(product_id), 0) + 1
         if quantity > min(product.stock, 10000):
@@ -86,7 +90,7 @@ def add_to_bag(
         message = f"{product.name} added to your bag."
         status = 200
     except DomainError as exc:
-        message, status = exc.message, exc.status
+        message, status = (exc.message, exc.status)
     if request.headers.get("HX-Request"):
         return render(
             request, "partials/bag_update.html", status, message=message, failed=status != 200
@@ -95,12 +99,12 @@ def add_to_bag(
     return redirect("/bag")
 
 
-def bag_context(request: Request, session: Session) -> dict[str, Any]:
+async def bag_context(request: Request, session: AsyncSession) -> dict[str, Any]:
     initialize_session(request)
     lines = []
     for product_id, quantity in request.session["cart"].items():
         try:
-            product = catalog.get_product(session, int(product_id))
+            product = await catalog.get_product(session, int(product_id))
             lines.append(
                 {
                     "product": product,
@@ -132,33 +136,35 @@ def bag_context(request: Request, session: Session) -> dict[str, Any]:
 
 
 @router.get("/bag", response_class=HTMLResponse)
-def bag(request: Request, session: SessionDependency) -> HTMLResponse:
+async def bag(request: Request, session: SessionDependency) -> HTMLResponse:
     notice = request.session.pop("notice", None)
-    return render(request, "bag.html", notice=notice, **bag_context(request, session))
+    return render(request, "bag.html", notice=notice, **await bag_context(request, session))
 
 
 @router.post("/bag/update")
-def update_bag(request: Request, session: SessionDependency, form: FormDependency) -> Response:
+async def update_bag(
+    request: Request, session: SessionDependency, form: FormDependency
+) -> Response:
     cart = dict(request.session.get("cart", {}))
     product_id = str(form.get("product_id", ""))
     raw_quantity = str(form.get("quantity", ""))
     if (
         product_id not in cart
         or not raw_quantity.isascii()
-        or not raw_quantity.isdigit()
-        or int(raw_quantity) > 10000
+        or (not raw_quantity.isdigit())
+        or (int(raw_quantity) > 10000)
     ):
         return render(
             request,
             "bag.html",
             422,
             error_message="Enter a quantity from 0 to 10000.",
-            **bag_context(request, session),
+            **await bag_context(request, session),
         )
     quantity = int(raw_quantity)
     if quantity:
         try:
-            product = catalog.get_product(session, int(product_id))
+            product = await catalog.get_product(session, int(product_id))
             if quantity > product.stock:
                 raise DomainError(
                     409,
@@ -171,7 +177,7 @@ def update_bag(request: Request, session: SessionDependency, form: FormDependenc
                 "bag.html",
                 exc.status,
                 error_message=exc.message,
-                **bag_context(request, session),
+                **await bag_context(request, session),
             )
         cart[product_id] = quantity
     else:
@@ -182,7 +188,7 @@ def update_bag(request: Request, session: SessionDependency, form: FormDependenc
 
 
 @router.post("/checkout")
-def checkout(request: Request, form: FormDependency) -> Response:
+async def checkout(request: Request, form: FormDependency) -> Response:
     initialize_session(request)
     key = str(form.get("purchase_key", ""))
     if request.session.get("last_purchase_key") == key and "receipt" in request.session:
@@ -200,17 +206,17 @@ def checkout(request: Request, form: FormDependency) -> Response:
         }
     )
     try:
-        result = create_order(
-            request.app.state.session_factory, request.session["client_id"], key, data
+        result = await create_order(
+            request.app.state.primary_db.sessionmaker, request.session["client_id"], key, data
         )
     except DomainError as exc:
-        with request.app.state.session_factory() as session:
+        async with request.app.state.primary_db.get_db() as session:
             return render(
                 request,
                 "bag.html",
                 exc.status,
                 error_message=exc.message,
-                **bag_context(request, session),
+                **await bag_context(request, session),
             )
     request.session["receipt"] = {
         "id": result["id"],
@@ -232,7 +238,7 @@ def receipt(request: Request) -> Response:
 
 
 @router.get("/admin", response_class=HTMLResponse)
-def administration(
+async def administration(
     request: Request,
     session: SessionDependency,
     q: str = Query(default="", max_length=200),
@@ -243,10 +249,12 @@ def administration(
     template = (
         "partials/inventory.html"
         if request.headers.get("HX-Request")
-        and not request.headers.get("HX-History-Restore-Request")
+        and (not request.headers.get("HX-History-Restore-Request"))
         else "admin.html"
     )
-    return render(request, template, notice=notice, **catalog_context(session, q, category, page))
+    return render(
+        request, template, notice=notice, **await catalog_context(session, q, category, page)
+    )
 
 
 @router.get("/admin/products/new", response_class=HTMLResponse)
@@ -255,8 +263,10 @@ def new_product(request: Request) -> HTMLResponse:
 
 
 @router.get("/admin/products/{product_id}/edit", response_class=HTMLResponse)
-def edit_product(request: Request, product_id: int, session: SessionDependency) -> HTMLResponse:
-    product = catalog.get_product(session, product_id)
+async def edit_product(
+    request: Request, product_id: int, session: SessionDependency
+) -> HTMLResponse:
+    product = await catalog.get_product(session, product_id)
     return render(
         request,
         "product_form.html",
@@ -278,15 +288,15 @@ def parse_product(form: FormData, editing: bool) -> ProductInput:
     return ProductUpdate.model_validate(values) if editing else ProductInput.model_validate(values)
 
 
-def save_product(request: Request, form: FormData, product_id: int | None = None) -> Response:
+async def save_product(request: Request, form: FormData, product_id: int | None = None) -> Response:
     editing = product_id is not None
     try:
         data = parse_product(form, editing)
-        with request.app.state.session_factory.begin() as session:
+        async with request.app.state.primary_db.transaction() as session:
             if product_id is None:
-                catalog.create_product(session, data)
+                await catalog.create_product(session, data)
             else:
-                catalog.update_product(
+                await catalog.update_product(
                     session, product_id, ProductUpdate.model_validate(data.model_dump())
                 )
         request.session["notice"] = "Product updated." if editing else "Product created."
@@ -316,29 +326,29 @@ def save_product(request: Request, form: FormData, product_id: int | None = None
 
 
 @router.post("/admin/products/new")
-def create_product(request: Request, form: FormDependency) -> Response:
-    return save_product(request, form)
+async def create_product(request: Request, form: FormDependency) -> Response:
+    return await save_product(request, form)
 
 
 @router.post("/admin/products/{product_id}/edit")
-def update_product(request: Request, product_id: int, form: FormDependency) -> Response:
-    return save_product(request, form, product_id)
+async def update_product(request: Request, product_id: int, form: FormDependency) -> Response:
+    return await save_product(request, form, product_id)
 
 
 @router.get("/admin/products/{product_id}/delete", response_class=HTMLResponse)
-def delete_confirmation(
+async def delete_confirmation(
     request: Request, product_id: int, session: SessionDependency
 ) -> HTMLResponse:
-    return render(request, "delete.html", product=catalog.get_product(session, product_id))
+    return render(request, "delete.html", product=await catalog.get_product(session, product_id))
 
 
 @router.post("/admin/products/{product_id}/delete")
-def delete_product(request: Request, product_id: int, form: FormDependency) -> Response:
+async def delete_product(request: Request, product_id: int, form: FormDependency) -> Response:
     version = str(form.get("version", ""))
     if not version.isascii() or not version.isdigit():
         raise DomainError(422, "invalid_version", "Reload the product and try again.")
-    with request.app.state.session_factory.begin() as session:
-        catalog.delete_product(session, product_id, int(version))
+    async with request.app.state.primary_db.transaction() as session:
+        await catalog.delete_product(session, product_id, int(version))
     request.session["notice"] = "Product removed from the store."
     return redirect("/admin")
 
@@ -349,24 +359,24 @@ def import_page(request: Request) -> HTMLResponse:
 
 
 @router.post("/admin/import")
-def import_file(request: Request, form: FormDependency) -> Response:
+async def import_file(request: Request, form: FormDependency) -> Response:
     uploaded = form.get("file")
     if not isinstance(uploaded, UploadFile):
         return render(request, "import.html", 422, error_message="Choose a CSV file to import.")
     initialize_session(request)
     try:
-        content = uploaded.file.read(MAX_BYTES + 1)
-        with request.app.state.session_factory.begin() as session:
-            preview = preview_products(session, content)
+        content = await uploaded.read(MAX_BYTES + 1)
+        async with request.app.state.primary_db.transaction() as session:
+            preview = await preview_products(session, content)
             if preview.errors:
-                batch = stage_import(
+                batch = await stage_import(
                     session,
                     request.session["client_id"],
                     uploaded.filename or "products.csv",
                     preview,
                 )
             else:
-                result = import_products(session, content)
+                result = await import_products(session, content)
                 batch = None
         if batch is not None:
             return render(request, "import.html", preview=batch)
@@ -376,7 +386,7 @@ def import_file(request: Request, form: FormDependency) -> Response:
             request, "import.html", exc.status, error_message=exc.message, import_errors=exc.details
         )
     finally:
-        uploaded.file.close()
+        await uploaded.close()
 
 
 def batch_id_from_form(form: FormData) -> UUID:
@@ -389,10 +399,12 @@ def batch_id_from_form(form: FormData) -> UUID:
 
 
 @router.post("/admin/import/confirm")
-def import_confirmation(request: Request, form: FormDependency) -> Response:
+async def import_confirmation(request: Request, form: FormDependency) -> Response:
     try:
-        with request.app.state.session_factory.begin() as session:
-            result = confirm_import(session, batch_id_from_form(form), request.session["client_id"])
+        async with request.app.state.primary_db.transaction() as session:
+            result = await confirm_import(
+                session, batch_id_from_form(form), request.session["client_id"]
+            )
         return render(
             request, "import.html", imported=result["imported"], skipped=result["skipped"]
         )
@@ -403,7 +415,7 @@ def import_confirmation(request: Request, form: FormDependency) -> Response:
 
 
 @router.post("/admin/import/cancel")
-def import_cancellation(request: Request, form: FormDependency) -> Response:
-    with request.app.state.session_factory.begin() as session:
-        cancel_import(session, batch_id_from_form(form), request.session["client_id"])
+async def import_cancellation(request: Request, form: FormDependency) -> Response:
+    async with request.app.state.primary_db.transaction() as session:
+        await cancel_import(session, batch_id_from_form(form), request.session["client_id"])
     return render(request, "import.html", cancelled=True)

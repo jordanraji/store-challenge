@@ -23,8 +23,8 @@ System_Boundary(store, "Store") {
 }
 Rel(shopper, app, "Browses, searches and purchases", "HTTP, port 5000")
 Rel(manager, app, "Manages products and CSV reviews", "HTTP, port 5000")
-Rel(app, db, "Reads and writes using bound parameters and transactions", "SQLAlchemy / psycopg, TCP 5432")
-Rel(migrate, db, "Applies versioned schema migrations", "SQLAlchemy / psycopg, TCP 5432")
+Rel(app, db, "Reads and writes using bound parameters and transactions", "Async SQLAlchemy / asyncpg, TCP 5432")
+Rel(migrate, db, "Applies versioned schema migrations", "Async SQLAlchemy / asyncpg, TCP 5432")
 SHOW_LEGEND()
 @enduml
 
@@ -41,7 +41,8 @@ Container_Boundary(app, "Store web application and API") {
     Component(catalog, "Catalog service", "app.catalog.service", "Product CRUD, search, version checks and atomic stock deductions")
     Component(imports, "CSV import service", "app.imports.service", "Parses and validates CSV; stages, confirms or cancels review batches")
     Component(orders, "Order service", "app.orders.service", "Coordinates purchase transactions, idempotency and bounded transient retries")
-    Component(persistence, "Database sessions and mapped models", "app.core.database; app.core.dependencies; module models", "SQLAlchemy session factory and parameterized ORM persistence")
+    Component(repositories, "Module repositories", "ProductRepository; ImportBatchRepository; OrderRepository", "Own SQL queries, writes, locks and flushes; receive sessions without committing transactions")
+    Component(persistence, "Database sessions and mapped models", "app.core.database; app.core.dependencies; module models", "PostgreSQLClient owns async engine, bounded pool and session scopes; mapped models support parameterized persistence")
 }
 ContainerDb(db, "Store database", "PostgreSQL 17.6", "Products, search indexes, stock, orders, idempotency records and import reviews")
 Rel(user, web, "Uses HTML forms and HTMX", "HTTP")
@@ -58,9 +59,10 @@ Rel(api, orders, "Creates idempotent orders")
 Rel(imports, validation, "Validates CSV rows")
 Rel(imports, catalog, "Creates validated products")
 Rel(orders, catalog, "Deducts stock within the purchase transaction")
-Rel(catalog, persistence, "Queries and updates products")
-Rel(imports, persistence, "Stores and locks review batches")
-Rel(orders, persistence, "Owns purchase transaction and order persistence")
-Rel(persistence, db, "Executes bound SQL statements", "psycopg, TCP 5432")
+Rel(catalog, repositories, "Queries and updates products")
+Rel(imports, repositories, "Stores and locks review batches")
+Rel(orders, repositories, "Persists orders and idempotency within purchase transaction")
+Rel(repositories, persistence, "Uses the supplied session and mapped models")
+Rel(persistence, db, "Executes bound SQL statements", "asyncpg, TCP 5432")
 SHOW_LEGEND()
 @enduml

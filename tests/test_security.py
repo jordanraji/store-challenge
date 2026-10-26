@@ -92,7 +92,7 @@ def test_sql_payload_is_parameterized_data_for_api_form_and_search(client, app, 
         assert client.get("/api/products", params={"q": query}).status_code == 200
         assert client.get("/", params={"q": query, "category": query}).status_code == 200
     assert client.get("/api/products", params={"q": "' OR 1=1 --"}).json()["total"] == 0
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Product)) == 2
     assert client.get(f"/api/products/{product['id']}").json()["name"] == SQL
 
@@ -140,7 +140,7 @@ def test_old_reviews_are_revalidated_before_confirming(client, app, product_data
         "/admin/import", data={"csrf": token}, files={"file": ("old.csv", content, "text/csv")}
     )
     batch_id = re.search(r'name="batch_id" value="([^"]+)"', review.text).group(1)
-    with app.state.session_factory.begin() as session:
+    with app.state.test_session_factory.begin() as session:
         batch = session.get(ImportBatch, UUID(batch_id))
         batch.products = [{"row": 2, "data": {**product_data, "name": XSS}}]
     response = client.post("/admin/import/confirm", data={"csrf": token, "batch_id": batch_id})
@@ -150,7 +150,7 @@ def test_old_reviews_are_revalidated_before_confirming(client, app, product_data
 
 
 def test_legacy_content_is_escaped_without_breaking_reads(client, app, product_data):
-    with app.state.session_factory.begin() as session:
+    with app.state.test_session_factory.begin() as session:
         product = Product(
             **{
                 **product_data,

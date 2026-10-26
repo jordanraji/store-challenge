@@ -10,15 +10,13 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 
 @router.post("", response_model=OrderOutput, status_code=201)
-def purchase(
+async def purchase(
     data: OrderInput,
     request: Request,
     client_id: Annotated[UUID, Header(alias="X-Client-ID")],
     key: Annotated[
         str,
-        Header(
-            alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
-        ),
+        Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern="^[A-Za-z0-9._:-]+$"),
     ],
 ) -> Any:
-    return create_order(request.app.state.session_factory, str(client_id), key, data)
+    return await create_order(request.app.state.primary_db.sessionmaker, str(client_id), key, data)

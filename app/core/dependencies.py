@@ -1,9 +1,9 @@
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator
 
 from fastapi import Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
-def get_session(request: Request) -> Iterator[Session]:
-    with request.app.state.session_factory.begin() as session:
+async def get_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    async with request.app.state.primary_db.transaction() as session:
         yield session

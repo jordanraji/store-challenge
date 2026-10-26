@@ -71,7 +71,7 @@ def test_cart_checkout_repeated_submission_and_stock(client, app, product_data):
     assert "Your simulated order is confirmed" in receipt.text
     assert client.post("/checkout", data=payload).status_code == 200
     assert client.get(f"/api/products/{product['id']}").json()["stock"] == 4
-    with app.state.session_factory() as session:
+    with app.state.test_session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 1
 
 
@@ -129,7 +129,7 @@ def test_category_filters_and_escaping(client, app, product_data):
     client.post("/api/products", json=product_data)
     from app.catalog.models import Product
 
-    with app.state.session_factory.begin() as session:
+    with app.state.test_session_factory.begin() as session:
         session.add(
             Product(
                 **{
