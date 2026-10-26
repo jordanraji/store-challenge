@@ -1,0 +1,4 @@
+<form class="search-form" action="{{ '/admin' if request.url.path.startswith('/admin') else '/' }}" method="get" role="search" hx-get="{{ '/admin' if request.url.path.startswith('/admin') else '/' }}" hx-target="{{ '#inventory' if request.url.path.startswith('/admin') else '#collection' }}" hx-swap="outerHTML" hx-push-url="true" hx-sync="this:replace">
+<label for="search-query" class="visually-hidden">Search products</label><div class="search-input">{{ icon('search', 22) }}<input id="search-query" type="search" name="q" value="{{ q }}" placeholder="Search by product, category or SKU" maxlength="200"><button type="submit" class="search-submit">Search {{ icon('arrow', 18) }}</button></div>
+{% if category %}<input type="hidden" name="category" value="{{ category }}">{% endif %}
+</form>

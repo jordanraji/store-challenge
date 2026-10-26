@@ -1,0 +1,3 @@
+{% extends 'base.html' %}
+{% block title %}Order confirmed{% endblock %}
+{% block content %}<section class="receipt"><div class="receipt-check d-flex align-items-center justify-content-center rounded-circle">{{ icon('check', 32) }}</div><h1>Good finds.<br>All yours.</h1><p>Your simulated order is confirmed. The product stock has been updated.</p><dl><div><dt>Order reference</dt><dd>{{ receipt.id }}</dd></div><div><dt>Items</dt><dd>{{ receipt.count }}</dd></div><div><dt>Total</dt><dd>{{ receipt.total|money }} USD</dd></div></dl><p class="form-text">No payment was collected. This order is part of the Store demo.</p><a href="/" class="btn btn-primary">Back to the collection {{ icon('arrow', 18) }}</a></section>{% endblock %}

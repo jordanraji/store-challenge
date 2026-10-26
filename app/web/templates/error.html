@@ -1,0 +1,3 @@
+{% extends 'base.html' %}
+{% block title %}Something needs attention{% endblock %}
+{% block content %}<section class="confirm-panel"><p class="text-body-secondary">{{ error.status }}</p><h1>{{ 'Product not found.' if error.status == 404 else 'Let’s try that again.' }}</h1><p role="alert">{{ error.message }}</p><a class="btn btn-primary" href="{{ '/admin' if request.url.path.startswith('/admin') else '/' }}">{{ 'Back to inventory' if request.url.path.startswith('/admin') else 'Back to the store' }} {{ icon('arrow', 18) }}</a></section>{% endblock %}

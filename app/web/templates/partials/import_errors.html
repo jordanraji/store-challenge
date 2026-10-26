@@ -1,0 +1,15 @@
+{% if import_errors %}
+<section class="import-errors" aria-label="Import errors">
+<h2>What needs attention</h2>
+{% if import_errors[0] is mapping %}
+<div class="import-error-list" tabindex="0" aria-label="Rows with errors">
+{% for problem in import_errors %}
+<article class="import-error-row">
+<div class="import-row-identity d-flex flex-wrap flex-sm-column gap-1"><strong>Row {{ problem.row }}</strong>{% if problem.sku %}<span>{{ problem.sku }}</span>{% endif %}{% if problem.name %}<span>{{ problem.name }}</span>{% endif %}</div>
+<div>{% if problem.message %}<p>{{ problem.message }}</p>{% endif %}{% if problem.errors %}<ul>{% for issue in problem.errors %}<li><strong>{{ issue.field }}</strong>{% if issue.value is defined %}: <code>{{ issue.value }}</code>{% endif %}<p>{{ issue.message }}</p></li>{% endfor %}</ul>{% endif %}</div>
+</article>
+{% endfor %}
+</div>
+{% else %}<p>Expected columns: {{ import_errors|join(', ') }}</p>{% endif %}
+</section>
+{% endif %}

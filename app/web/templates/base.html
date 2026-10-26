@@ -1,0 +1,22 @@
+{% from 'macros.html' import icon, csrf_input %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"selfRequestsOnly":true}'>
+<meta name="theme-color" content="#202124"><meta name="description" content="Browse the Store collection, find products and manage your bag.">
+<title>{% block title %}Shop the collection{% endblock %} — Store</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/static/vendor/manrope-regular.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/static/vendor/bootstrap-5.3.8.min.css">
+<link rel="stylesheet" href="/static/store.css">
+<script src="/static/vendor/htmx.min.js" defer></script><script src="/static/store.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header"><div class="header-inner d-flex align-items-center justify-content-between gap-4"><a class="wordmark" href="/" aria-label="Store home">Store<span class="brand-dot"></span></a><nav aria-label="Main navigation"><a href="/" {% if not request.url.path.startswith('/admin') %}aria-current="page"{% endif %}>Shop</a><a href="/admin" {% if request.url.path.startswith('/admin') %}aria-current="page"{% endif %}>Manage products</a></nav>{% include 'partials/bag_control.html' %}</div></header>
+<main id="main" class="page-wrap" tabindex="-1">{% block content %}{% endblock %}</main>
+<footer class="site-footer d-flex align-items-center flex-wrap gap-4"><a class="footer-brand" href="/">Store</a><p>A working collection. A straightforward shop.</p><span>USD · Simulated payments</span></footer>
+<div id="notification" class="notification" role="status" aria-live="polite"></div>
+</body>
+</html>

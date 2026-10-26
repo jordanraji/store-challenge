@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Review import' if preview else 'Import products' }}{% endblock %}
+{% block content %}
+<a class="back-link" href="/admin">{{ icon('back', 18) }} Back to inventory</a>
+<div class="form-layout row g-5">
+<div class="form-intro col-12 col-lg-5">
+<h1>{{ 'Review your' if preview else 'Bring your' }}<br>{{ 'import.' if preview else 'collection in.' }}</h1>
+<p>Import products together with one CSV file. We check every row before adding anything.</p>
+<dl class="import-rules"><div><dt>File format</dt><dd>CSV, UTF-8</dd></div><div><dt>Maximum size</dt><dd>2 MiB · 1,000 products</dd></div><div><dt>Existing SKUs</dt><dd>Excluded, never overwritten</dd></div></dl>
+</div>
+<div class="import-body col-12 col-lg-7">
+{% if preview %}
+<div class="alert alert-primary" role="status"><strong>Nothing has been imported yet.</strong><p>We found errors in {{ preview.filename }}. Review them before deciding how to continue.</p></div>
+<div class="import-counts" aria-label="Validation summary"><p><strong>{{ preview.products|length }}</strong> valid {{ 'row' if preview.products|length == 1 else 'rows' }}</p><p><strong>{{ preview.errors|length }}</strong> {{ 'row' if preview.errors|length == 1 else 'rows' }} with errors</p></div>
+<section class="import-decision" aria-labelledby="import-question">
+<h2 id="import-question">{{ 'Do you want to import only the valid rows?' if preview.products else 'No valid rows are available to import.' }}</h2>
+<p>{{ 'Rows with errors will be skipped. You can also cancel, correct the CSV and upload it again.' if preview.products else 'Cancel this upload, correct the errors below and upload a new CSV.' }}</p>
+<p class="form-text">For repeated SKUs, only the first valid occurrence is eligible. SKUs already in inventory are excluded. This review is available for 30 minutes.</p>
+<div class="import-decision-actions d-flex flex-column-reverse flex-sm-row align-items-stretch align-items-sm-center justify-content-between gap-3 mt-4">
+<form method="post" action="/admin/import/cancel">{{ csrf_input(csrf) }}<input type="hidden" name="batch_id" value="{{ preview.id }}"><button class="btn btn-outline-secondary">Cancel upload</button></form>
+{% if preview.products %}<form method="post" action="/admin/import/confirm">{{ csrf_input(csrf) }}<input type="hidden" name="batch_id" value="{{ preview.id }}"><button class="btn btn-primary">Import {{ preview.products|length }} valid {{ 'row' if preview.products|length == 1 else 'rows' }} {{ icon('arrow', 18) }}</button></form>{% endif %}
+</div>
+</section>
+{% with import_errors = preview.errors %}{% include 'partials/import_errors.html' %}{% endwith %}
+{% else %}
+{% if cancelled %}<div class="alert alert-success" role="status"><strong>Upload cancelled. No products were imported.</strong><p>Correct your CSV and choose a new file when you are ready.</p></div>{% endif %}
+{% if imported is defined %}<div class="alert alert-success" role="status">{{ imported }} {{ 'product imported' if imported == 1 else 'products imported' }} successfully.{% if skipped %} {{ skipped }} {{ 'row was' if skipped == 1 else 'rows were' }} skipped because of errors.{% endif %} <a href="/admin">View inventory</a></div>{% endif %}
+{% if error_message %}<div class="alert alert-danger" role="alert"><strong>Nothing was imported.</strong><p>{{ error_message }}</p></div>{% endif %}
+<form action="/admin/import" method="post" enctype="multipart/form-data">
+{{ csrf_input(csrf) }}
+<div class="file-area d-flex flex-column align-items-center text-center">{{ icon('upload', 32) }}<label for="csv-file">Choose your product CSV</label><p>Choose a file from your computer.</p><input class="form-control" type="file" name="file" id="csv-file" accept=".csv,text/csv" required></div>
+<div class="csv-columns"><h2>Required columns</h2><code>name, sku, description, category, price, stock, weight_kg</code><p>Include a header row. If any rows have errors, you can review them and choose to import only valid rows or cancel without saving products.</p><a class="btn btn-link text-link" href="/static/products-template.csv" download>Download a CSV template</a><br><a class="btn btn-link text-link" href="/static/example-products.csv" download>Download a sample collection (9 products)</a></div>
+<div class="form-actions d-flex align-items-center justify-content-between justify-content-sm-end gap-2"><a href="/admin" class="btn btn-outline-secondary">Cancel</a><button class="btn btn-primary">Import products {{ icon('arrow', 18) }}</button></div>
+</form>
+{% include 'partials/import_errors.html' %}
+{% endif %}
+</div></div>
+{% endblock %}

@@ -1,0 +1,10 @@
+name,sku,description,category,price,stock,weight_kg
+Running Shoes,RS-001,Lightweight running shoes for daily training,Footwear,89.99,150,0.35
+Organic Coffee Beans,CB-010,"Single origin, medium roast, 1kg bag",Food & Beverage,18.75,500,1.0
+Wireless Mouse,WM-042,Ergonomic wireless mouse with USB receiver,Electronics,$29.99,75,0.12
+Leather Wallet,LW-019,"Genuine leather bifold wallet, RFID blocking",Accessories,39.99,180,0.15
+Camping Tent,CT-005,"4-person dome tent, waterproof 3000mm rating",Outdoors,199.99,25,4.5
+Protein Powder,PP-012,"Whey protein isolate, chocolate flavor, 2kg",Food & Beverage,34.99,400,2.0
+Sunglasses,SG-027,Polarized UV400 protection sunglasses,Accessories,22.00,350,0.04
+Standing Desk,SD-004,"Electric height-adjustable desk, 140-160cm range",Home & Office,449.99,15,35.0
+Bluetooth Speaker,BS-021,"Portable waterproof speaker, 10W, 12hr battery",Electronics,59.99,110,0.8

@@ -1,0 +1,46 @@
+x-app: &app
+  image: store-backend:local
+  environment: &app-environment
+    DATABASE_URL: postgresql+psycopg://store:store@db:5432/store
+
+services:
+  db:
+    image: postgres:17.6
+    environment:
+      POSTGRES_USER: store
+      POSTGRES_PASSWORD: store
+      POSTGRES_DB: store
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - store_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB -c 'SELECT 1' >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  migrate:
+    <<: *app
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+  api:
+    <<: *app
+    environment:
+      <<: *app-environment
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+    ports:
+      - "127.0.0.1:${API_PORT:-5000}:5000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+volumes:
+  store_data:

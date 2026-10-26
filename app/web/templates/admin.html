@@ -1,0 +1,3 @@
+{% extends 'base.html' %}
+{% block title %}Manage products{% endblock %}
+{% block content %}<div class="management-heading"><div class="page-heading"><h1>Manage products</h1><p>A clear view of your collection.</p></div><div class="heading-actions d-flex align-items-center gap-2"><a class="btn btn-outline-secondary" href="/admin/import">{{ icon('upload', 18) }} Import CSV</a><a class="btn btn-primary" href="/admin/products/new">{{ icon('plus', 18) }} Add product</a></div></div><div class="environment-note">Local demo workspace. Administration has no sign-in protection.</div>{% include 'partials/inventory.html' %}{% endblock %}

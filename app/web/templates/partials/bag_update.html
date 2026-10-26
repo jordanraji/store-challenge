@@ -1,0 +1,3 @@
+{% from 'macros.html' import icon %}
+{% include 'partials/bag_control.html' %}
+<div id="notification" class="notification is-visible{% if failed %} is-error{% endif %}" role="status" aria-live="polite" hx-swap-oob="outerHTML">{{ message }} <a href="/bag">View bag</a></div>
